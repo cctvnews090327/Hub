@@ -10,8 +10,20 @@ for _, v in ipairs(workspace:GetChildren()) do
     if v.Name == "GFV_HL" or v.Name == "GFV_SB" then pcall(function() v:Destroy() end) end
 end
 
+-- Anti-AFK
+spawn(function()
+    local plrs = game:GetService("Players")
+    if not plrs.LocalPlayer then
+        plrs:GetPropertyChangedSignal("LocalPlayer"):Wait()
+    end
+    if getconnections then
+        for i, v in pairs(getconnections(plrs.LocalPlayer.Idled)) do
+            v:Disable()
+        end
+    end
+end)
+
 local Players = game:GetService("Players")
-local RS      = game:GetService("ReplicatedStorage")
 local lp      = Players.LocalPlayer
 local container = workspace:FindFirstChild("ClientPlants")
 
