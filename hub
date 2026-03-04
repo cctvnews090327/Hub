@@ -262,7 +262,23 @@ end)
 -- GUI
 -- ════════════════════════════════════════
 local PW,PH,TH,TABH = 408,570,40,34
-local gui = Instance.new("ScreenGui"); gui.Name="GH_TOOL_UI"; gui.ResetOnSpawn=false; gui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; gui.Parent=(gethui and gethui()) or game:GetService("CoreGui"); _G.GH_TOOL_UI=gui
+local gui = Instance.new("ScreenGui")
+gui.Name = "GH_TOOL_UI"
+gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.IgnoreGuiInset = true
+_G.GH_TOOL_UI = gui
+local guiParented = false
+pcall(function()
+    if gethui then gui.Parent = gethui(); guiParented = true end
+end)
+if not guiParented then
+    pcall(function() gui.Parent = game:GetService("CoreGui"); guiParented = true end)
+end
+if not guiParented then
+    gui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+end
+print("[GH Tools] GUI parented to: " .. tostring(gui.Parent))
 
 local toggleBtn = mkBtn(gui,UDim2.new(0,16,0.46,0),UDim2.new(0,130,0,36),"🌿  GH Tools",13,Color3.fromRGB(7,16,11),C.accent); corner(toggleBtn,10)
 
