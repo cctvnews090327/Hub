@@ -23,7 +23,7 @@ end
 local remotes          = RS:WaitForChild("RemoteEvents")
 local GetShopData      = remotes:WaitForChild("GetShopData")
 local PurchaseShopItem = remotes:WaitForChild("PurchaseShopItem")
-local ShopRestocked    = remotes:WaitForChild("ShopRestocked")
+local ShopRestocked    = remotes:FindFirstChild("ShopRestocked")
 
 local SEED_POS  = Vector3.new(176.5, 204.14, 674.0)
 local GEAR_POS  = Vector3.new(217.0, 208.0, 613.0)
@@ -322,12 +322,14 @@ local function startLoop()
     end)
 end
 
-ShopRestocked.OnClientEvent:Connect(function(shopId)
-    local shopKey = (shopId=="SeedShop") and "seed" or "gear"
-    if abState[shopKey].enabled then
-        setStatus("Restock! Checking stock...", C.orange)
-    end
-end)
+if ShopRestocked then
+    ShopRestocked.OnClientEvent:Connect(function(shopId)
+        local shopKey = (shopId=="SeedShop") and "seed" or "gear"
+        if abState[shopKey].enabled then
+            setStatus("Restock! Checking stock...", C.orange)
+        end
+    end)
+end
 
 -- ════════════════════════════════════════
 -- GUI
