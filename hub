@@ -1,0 +1,457 @@
+-- Garden Horizon Unified Tools | Xeno Compatible
+-- Host this on GitHub, load via loadstring
+
+pcall(function() if _G.GH_TOOL_UI then _G.GH_TOOL_UI:Destroy() end end)
+pcall(function() if _G.GardenFruitHL then _G.GardenFruitHL:Destroy() end end)
+pcall(function() if _G.GardenFruitSB then _G.GardenFruitSB:Destroy() end end)
+pcall(function() if _G.GardenFruitArrow then _G.GardenFruitArrow:Destroy() end end)
+_G.GardenFruitHL = nil; _G.GardenFruitSB = nil; _G.GardenFruitArrow = nil
+for _, v in ipairs(workspace:GetChildren()) do
+    if v.Name == "GFV_HL" or v.Name == "GFV_SB" then pcall(function() v:Destroy() end) end
+end
+
+local Players = game:GetService("Players")
+local RS      = game:GetService("ReplicatedStorage")
+local lp      = Players.LocalPlayer
+local container = workspace:FindFirstChild("ClientPlants")
+
+local function getHRP()
+    local char = lp.Character or lp.CharacterAdded:Wait()
+    return char:WaitForChild("HumanoidRootPart")
+end
+
+local remotes          = RS:WaitForChild("RemoteEvents")
+local GetShopData      = remotes:WaitForChild("GetShopData")
+local PurchaseShopItem = remotes:WaitForChild("PurchaseShopItem")
+local ShopRestocked    = remotes:WaitForChild("ShopRestocked")
+
+local SEED_POS  = Vector3.new(176.5, 204.14, 674.0)
+local GEAR_POS  = Vector3.new(217.0, 208.0, 613.0)
+local SEED_ITEMS = {"Carrot Seed","Corn Seed","Onion Seed","Strawberry Seed","Mushroom Seed","Beetroot Seed","Tomato Seed","Apple Seed","Rose Seed","Wheat Seed","Banana Seed","Plum Seed","Potato Seed","Cabbage Seed","Cherry Seed","Bamboo Seed","Mango Seed"}
+local GEAR_ITEMS = {"Watering Can","Basic Sprinkler","Harvest Bell","Turbo Sprinkler","Favorite Tool","Super Sprinkler","Trowel"}
+
+local abState = {
+    seed = {enabled=false, selected={}, buyAll=false},
+    gear = {enabled=false, selected={}, buyAll=false},
+}
+for _, v in pairs(SEED_ITEMS) do abState.seed.selected[v] = false end
+for _, v in pairs(GEAR_ITEMS) do abState.gear.selected[v] = false end
+
+local isBuying = false
+local chkRefs  = {seed={}, gear={}}
+local statusLbl = nil
+
+local PLANT_DATA, MUTATION_DATA, VARIANT_DATA = {}, {}, {}
+pcall(function() PLANT_DATA    = require(RS.Plants.Definitions.PlantDataDefinitions)    end)
+pcall(function() MUTATION_DATA = require(RS.Plants.Definitions.MutationDataDefinitions) end)
+pcall(function() VARIANT_DATA  = require(RS.Plants.Definitions.VariantDataDefinitions)  end)
+
+local C = {
+    panel=Color3.fromRGB(13,16,25), card=Color3.fromRGB(20,24,37), row=Color3.fromRGB(16,20,31),
+    accent=Color3.fromRGB(60,182,120), text=Color3.fromRGB(202,212,226), dim=Color3.fromRGB(85,96,118),
+    green=Color3.fromRGB(60,182,120), red=Color3.fromRGB(198,52,62), orange=Color3.fromRGB(226,152,46),
+    white=Color3.fromRGB(255,255,255), togOn=Color3.fromRGB(60,182,120), togOff=Color3.fromRGB(28,34,50),
+    chkOn=Color3.fromRGB(60,182,120), chkOff=Color3.fromRGB(28,34,50),
+    startG=Color3.fromRGB(40,148,78), stopR=Color3.fromRGB(182,48,56),
+    seedHdr=Color3.fromRGB(42,158,96), gearHdr=Color3.fromRGB(62,125,210),
+    tabOn=Color3.fromRGB(60,182,120), tabOff=Color3.fromRGB(25,30,46),
+}
+local VARIANT_COLORS = {Gold=Color3.fromRGB(255,200,0),Silver=Color3.fromRGB(185,215,245),Rainbow=Color3.fromRGB(255,100,255)}
+local RARITY_COLORS  = {Common=Color3.fromRGB(160,160,160),Uncommon=Color3.fromRGB(70,200,70),Rare=Color3.fromRGB(70,140,255),Epic=Color3.fromRGB(175,70,255),Legendary=Color3.fromRGB(255,165,0)}
+local STAGE_COLORS   = {Unripe=Color3.fromRGB(255,90,90),Ripe=Color3.fromRGB(255,220,60),Lush=Color3.fromRGB(80,255,80)}
+local MUTATION_COLORS = {Shocked=Color3.fromRGB(255,255,0),Starstruck=Color3.fromRGB(175,70,255),Meteoric=Color3.fromRGB(200,0,0),Muddy=Color3.fromRGB(180,140,30),Mossy=Color3.fromRGB(80,180,60),Frostbit=Color3.fromRGB(180,240,255),Snowy=Color3.fromRGB(160,230,255),Sandy=Color3.fromRGB(240,210,80),Foggy=Color3.fromRGB(180,180,180),Soaked=Color3.fromRGB(70,145,220),Flooded=Color3.fromRGB(50,100,200),Chilled=Color3.fromRGB(160,215,235)}
+
+-- ── Helpers ──
+local function splitCSV(s)
+    local t = {}
+    if not s or s == "" then return t end
+    for p in (s..","):gmatch("([^,]*),") do
+        local tr = p:match("^%s*(.-)%s*$")
+        if tr ~= "" then table.insert(t, tr) end
+    end
+    return t
+end
+local function fmt(n)
+    if not n or n <= 0 then return "$0" end
+    local s,out,len = tostring(math.floor(n)),"",#tostring(math.floor(n))
+    for i=1,len do if i>1 and (len-i+1)%3==0 then out=out.."," end out=out..s:sub(i,i) end
+    return "$"..out
+end
+local function setStatus(txt, col)
+    if statusLbl then statusLbl.Text="● "..txt; statusLbl.TextColor3=col or C.dim end
+end
+local function corner(p, r) local c=Instance.new("UICorner",p); c.CornerRadius=UDim.new(0,r or 8) end
+local function mkFrame(par,pos,sz,bg) local f=Instance.new("Frame",par); f.Position=pos; f.Size=sz; f.BackgroundColor3=bg or C.card; f.BorderSizePixel=0; return f end
+local function mkLabel(par,pos,sz,txt,tsz,fnt,col,xa) local l=Instance.new("TextLabel",par); l.Position=pos; l.Size=sz; l.BackgroundTransparency=1; l.Text=txt; l.TextSize=tsz or 12; l.Font=fnt or Enum.Font.Gotham; l.TextColor3=col or C.text; l.TextXAlignment=xa or Enum.TextXAlignment.Left; return l end
+local function mkBtn(par,pos,sz,txt,tsz,col,bg) local b=Instance.new("TextButton",par); b.Position=pos; b.Size=sz; b.BackgroundColor3=bg or C.card; b.Text=txt; b.TextSize=tsz or 12; b.Font=Enum.Font.GothamBold; b.TextColor3=col or C.text; b.BorderSizePixel=0; b.AutoButtonColor=false; return b end
+
+local function calcValue(plantType, weight, mutStr, varStr, ripe, isPlant)
+    local pdata = PLANT_DATA[plantType]
+    if not pdata then return 0 end
+    local baseV = isPlant and (pdata.PlantBaseValue or 0) or (pdata.FruitBaseValue or 0)
+    local baseW = isPlant and (pdata.PlantBaseWeight or 1) or (pdata.FruitBaseWeight or 1)
+    if baseV==0 or baseW==0 then return 0 end
+    local scale = weight/baseW
+    local r = (ripe and ripe>0) and ripe or 1
+    local mutList = splitCSV(mutStr)
+    local mutMult = 1
+    if #mutList > 0 then
+        local s = 0
+        for _, m in ipairs(mutList) do local md=MUTATION_DATA[m]; if md and md.priceMultiplier then s=s+md.priceMultiplier end end
+        mutMult = s - #mutList + 1; if mutMult < 1 then mutMult = 1 end
+    end
+    local varMult = 1
+    if varStr and varStr~="" then local vd=VARIANT_DATA[varStr]; if vd and vd.priceMultiplier then varMult=vd.priceMultiplier end end
+    return math.floor(baseV * scale * scale * r * varMult * mutMult)
+end
+
+local function clearHL()
+    pcall(function() if _G.GardenFruitHL    then _G.GardenFruitHL:Destroy()    end; _G.GardenFruitHL    = nil end)
+    pcall(function() if _G.GardenFruitSB    then _G.GardenFruitSB:Destroy()    end; _G.GardenFruitSB    = nil end)
+    pcall(function() if _G.GardenFruitArrow then _G.GardenFruitArrow:Destroy() end; _G.GardenFruitArrow = nil end)
+    for _,v in ipairs(workspace:GetChildren()) do if v.Name=="GFV_HL" or v.Name=="GFV_SB" then pcall(function() v:Destroy() end) end end
+end
+local function highlightModel(model)
+    clearHL(); if not model or not model.Parent then return end
+    pcall(function() local hl=Instance.new("Highlight"); hl.Name="GFV_HL"; hl.Adornee=model; hl.FillColor=Color3.fromRGB(0,255,100); hl.FillTransparency=0.35; hl.OutlineColor=Color3.fromRGB(50,255,80); hl.OutlineTransparency=0; hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop; hl.Parent=workspace; _G.GardenFruitHL=hl end)
+    pcall(function() local sb=Instance.new("SelectionBox"); sb.Name="GFV_SB"; sb.Adornee=model; sb.Color3=Color3.fromRGB(0,255,100); sb.LineThickness=0.07; sb.SurfaceColor3=Color3.fromRGB(0,255,100); sb.SurfaceTransparency=0.5; sb.Parent=workspace; _G.GardenFruitSB=sb end)
+    pcall(function()
+        local ap = (model:IsA("BasePart") and model) or model:FindFirstChild("Handle") or model:FindFirstChildWhichIsA("BasePart")
+        if not ap then return end
+        local bb=Instance.new("BillboardGui",ap); bb.Name="GFV_Arrow"; bb.Size=UDim2.new(0,60,0,60); bb.StudsOffset=Vector3.new(0,4,0); bb.AlwaysOnTop=true; _G.GardenFruitArrow=bb
+        local l=Instance.new("TextLabel",bb); l.Size=UDim2.new(1,0,1,0); l.BackgroundTransparency=1; l.Text="⬇"; l.TextColor3=Color3.fromRGB(0,255,100); l.TextStrokeTransparency=0; l.TextScaled=true; l.Font=Enum.Font.GothamBold
+    end)
+end
+
+local function collectData()
+    local items = {}
+    if not container then return items end
+    for _, plant in ipairs(container:GetChildren()) do
+        if plant:IsA("Model") then
+            local pType=plant:GetAttribute("PlantType") or ""; local isGiant=plant:GetAttribute("IsGiant") or false; local fruitFound=false
+            for _, child in ipairs(plant:GetChildren()) do
+                if child:IsA("Model") and child.Name:find("Fruit") then
+                    fruitFound=true
+                    if child:GetAttribute("FullyGrown")==true then
+                        local fw=child:GetAttribute("FruitWeight") or 0; local mut=child:GetAttribute("Mutation") or ""; local var=child:GetAttribute("Variant") or ""; local stage=child:GetAttribute("RipenessStage") or ""; local ripe=child:GetAttribute("RipenessMultiplier") or 1
+                        local val=calcValue(pType,fw,mut,var,ripe,false); local mutList=splitCSV(mut)
+                        local mutMult=1; if #mutList>0 then local s=0; for _,m in ipairs(mutList) do local md=MUTATION_DATA[m]; if md then s=s+(md.priceMultiplier or 1) end end; mutMult=s-#mutList+1; if mutMult<1 then mutMult=1 end end
+                        local varMult=1; if var~="" then local vd=VARIANT_DATA[var]; if vd then varMult=vd.priceMultiplier or 1 end end
+                        table.insert(items,{model=child,plantType=pType,weight=fw,value=val,mutation=mut,mutList=mutList,mutMult=mutMult,variant=var,varMult=varMult,stage=stage,ripe=ripe,isGiant=isGiant,isPlant=false})
+                    end
+                end
+            end
+            if not fruitFound then
+                local pw=plant:GetAttribute("PlantWeight")
+                if pw and plant:GetAttribute("HarvestablePlant") then
+                    local mut=plant:GetAttribute("Mutation") or ""; local var=plant:GetAttribute("Variant") or ""; local stage=plant:GetAttribute("RipenessStage") or ""; local ripe=plant:GetAttribute("RipenessMultiplier") or 1
+                    local val=calcValue(pType,pw,mut,var,ripe,true); local mutList=splitCSV(mut)
+                    local mutMult=1; if #mutList>0 then local s=0; for _,m in ipairs(mutList) do local md=MUTATION_DATA[m]; if md then s=s+(md.priceMultiplier or 1) end end; mutMult=s-#mutList+1; if mutMult<1 then mutMult=1 end end
+                    local varMult=1; if var~="" then local vd=VARIANT_DATA[var]; if vd then varMult=vd.priceMultiplier or 1 end end
+                    table.insert(items,{model=plant,plantType=pType,weight=pw,value=val,mutation=mut,mutList=mutList,mutMult=mutMult,variant=var,varMult=varMult,stage=stage,ripe=ripe,isGiant=isGiant,isPlant=true})
+                end
+            end
+        end
+    end
+    table.sort(items, function(a,b) return a.value>b.value end)
+    return items
+end
+
+-- ════════════════════════════════════════
+-- AUTOBUY LOGIC — single trip for both shops
+-- ════════════════════════════════════════
+local function tpTo(pos) local hrp=getHRP(); if hrp then hrp.CFrame=CFrame.new(pos) end end
+
+local function buyShop(shopId, shopKey, shopPos)
+    local ok, data = pcall(function() return GetShopData:InvokeServer(shopId) end)
+    if not ok or not data or not data.Items then return 0 end
+    local items = shopKey=="seed" and SEED_ITEMS or GEAR_ITEMS
+    local toBuy = {}
+    for _, name in pairs(items) do
+        if abState[shopKey].selected[name] then
+            local e = data.Items[name]; if e and e.Amount and e.Amount>0 then table.insert(toBuy, name) end
+        end
+    end
+    if #toBuy == 0 then return 0 end
+
+    tpTo(shopPos); wait(0.3)
+    local bought = 0
+    for _, name in pairs(toBuy) do
+        if not abState[shopKey].enabled then break end
+        local available = (data.Items[name] and data.Items[name].Amount) or 0
+        local maxBuys = abState[shopKey].buyAll and available or 1
+        for i = 1, maxBuys do
+            if not abState[shopKey].enabled then break end
+            setStatus("Buying "..name.." "..i.."/"..maxBuys, C.orange)
+            local pok, result = pcall(function() return PurchaseShopItem:InvokeServer(shopId, name) end)
+            if pok and result then
+                bought = bought + 1
+                if type(result)=="table" and result.Items then
+                    data = result
+                    local rem = data.Items[name] and data.Items[name].Amount or 0
+                    if rem <= 0 then break end
+                end
+            else break end
+            wait(0.07)
+        end
+    end
+    return bought
+end
+
+-- ONE shared loop — saves pos once, visits enabled shops, TPs back once
+local loopRunning = false
+local function startLoop()
+    if loopRunning then return end
+    loopRunning = true
+    spawn(function()
+        while abState.seed.enabled or abState.gear.enabled do
+            if not isBuying then
+                -- check if anything to buy before TP
+                local seedHasStock, gearHasStock = false, false
+                if abState.seed.enabled then
+                    local ok, d = pcall(function() return GetShopData:InvokeServer("SeedShop") end)
+                    if ok and d and d.Items then
+                        for _, name in pairs(SEED_ITEMS) do
+                            if abState.seed.selected[name] then
+                                local e = d.Items[name]; if e and e.Amount and e.Amount>0 then seedHasStock=true; break end
+                            end
+                        end
+                    end
+                end
+                if abState.gear.enabled then
+                    local ok, d = pcall(function() return GetShopData:InvokeServer("GearShop") end)
+                    if ok and d and d.Items then
+                        for _, name in pairs(GEAR_ITEMS) do
+                            if abState.gear.selected[name] then
+                                local e = d.Items[name]; if e and e.Amount and e.Amount>0 then gearHasStock=true; break end
+                            end
+                        end
+                    end
+                end
+
+                if seedHasStock or gearHasStock then
+                    isBuying = true
+                    local savedPos = getHRP().CFrame.Position
+                    local total = 0
+                    if seedHasStock then total = total + buyShop("SeedShop","seed",SEED_POS) end
+                    if gearHasStock then total = total + buyShop("GearShop","gear",GEAR_POS) end
+                    tpTo(savedPos)
+                    if total > 0 then setStatus("Bought x"..total.." — back!", C.green)
+                    else setStatus("Nothing bought — back", C.dim) end
+                    isBuying = false
+                else
+                    setStatus("Watching stock...", C.dim)
+                end
+            end
+            wait(1)
+        end
+        loopRunning = false
+        if not abState.seed.enabled and not abState.gear.enabled then setStatus("Stopped", C.dim) end
+    end)
+end
+
+ShopRestocked.OnClientEvent:Connect(function(shopId)
+    local shopKey = (shopId=="SeedShop") and "seed" or "gear"
+    if abState[shopKey].enabled and not isBuying then
+        setStatus("Restock detected!", C.orange)
+        -- loop will pick it up on next 1s tick automatically
+    end
+end)
+
+-- ════════════════════════════════════════
+-- GUI
+-- ════════════════════════════════════════
+local PW,PH,TH,TABH = 408,570,40,34
+local gui = Instance.new("ScreenGui"); gui.Name="GH_TOOL_UI"; gui.ResetOnSpawn=false; gui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; gui.Parent=(gethui and gethui()) or game:GetService("CoreGui"); _G.GH_TOOL_UI=gui
+
+local toggleBtn = mkBtn(gui,UDim2.new(0,16,0.46,0),UDim2.new(0,130,0,36),"🌿  GH Tools",13,Color3.fromRGB(7,16,11),C.accent); corner(toggleBtn,10)
+
+local panel=mkFrame(gui,nil,nil,C.panel); panel.Size=UDim2.new(0,PW,0,PH); panel.Position=UDim2.new(0,160,0.46,-285); panel.Visible=false; panel.ClipsDescendants=true; corner(panel,13)
+
+-- Title bar
+local titleBar=mkFrame(panel,UDim2.new(0,0,0,0),UDim2.new(0,PW,0,TH),C.accent); corner(titleBar,13)
+mkFrame(titleBar,UDim2.new(0,0,1,-13),UDim2.new(1,0,0,13),C.accent)
+mkLabel(titleBar,UDim2.new(0,13,0,0),UDim2.new(1,-46,1,0),"🌿  Garden Horizon Tools",14,Enum.Font.GothamBold,Color3.fromRGB(7,16,11))
+local closeBtn=mkBtn(titleBar,UDim2.new(1,-34,0.5,-13),UDim2.new(0,26,0,26),"✕",12,C.white,Color3.fromRGB(7,16,11)); closeBtn.BackgroundTransparency=0.5; corner(closeBtn,13)
+
+-- Tab bar
+local tabBar=mkFrame(panel,UDim2.new(0,0,0,TH),UDim2.new(0,PW,0,TABH),C.card)
+local tab1=mkBtn(tabBar,UDim2.new(0,4,0,4),UDim2.new(0.5,-4,1,-8),"🛒  AutoBuy",12,Color3.fromRGB(7,16,11),C.tabOn); corner(tab1,7)
+local tab2=mkBtn(tabBar,UDim2.new(0.5,0,0,4),UDim2.new(0.5,-4,1,-8),"🍎  Fruit Values",12,C.dim,C.tabOff); corner(tab2,7)
+
+local CY=TH+TABH; local CH=PH-CY
+
+-- Page 1 — AutoBuy
+local page1=mkFrame(panel,UDim2.new(0,0,0,CY),UDim2.new(0,PW,0,CH),Color3.fromRGB(0,0,0)); page1.BackgroundTransparency=1; page1.Visible=true
+
+local statRow=mkFrame(page1,UDim2.new(0,8,0,6),UDim2.new(1,-16,0,26),C.row); corner(statRow,7)
+statusLbl=mkLabel(statRow,UDim2.new(0,10,0,0),UDim2.new(1,-10,1,0),"● Ready",12,Enum.Font.Gotham,C.green)
+
+local secScroll=Instance.new("ScrollingFrame",page1); secScroll.Size=UDim2.new(1,0,1,-38); secScroll.Position=UDim2.new(0,0,0,38); secScroll.BackgroundTransparency=1; secScroll.BorderSizePixel=0; secScroll.ScrollBarThickness=3; secScroll.ScrollBarImageColor3=C.accent; secScroll.CanvasSize=UDim2.new(0,0,0,0); secScroll.AutomaticCanvasSize=Enum.AutomaticSize.Y; secScroll.ClipsDescendants=true
+local secLayout=Instance.new("UIListLayout",secScroll); secLayout.Padding=UDim.new(0,8); secLayout.SortOrder=Enum.SortOrder.LayoutOrder
+local secPad=Instance.new("UIPadding",secScroll); secPad.PaddingTop=UDim.new(0,6); secPad.PaddingBottom=UDim.new(0,10); secPad.PaddingLeft=UDim.new(0,8); secPad.PaddingRight=UDim.new(0,8)
+
+local HDR_H,ITEM_H,ITEM_G,CTRL_H = 36,26,2,94
+
+local function makeTogSwitch(parent, shopKey)
+    local bg=mkBtn(parent,UDim2.new(1,-44,0.5,-10),UDim2.new(0,36,0,20),"",0,nil,C.togOff); corner(bg,11)
+    local dot=mkFrame(bg,UDim2.new(0,3,0.5,-7),UDim2.new(0,14,0,14),C.white); corner(dot,7)
+    local function ref() local on=abState[shopKey].buyAll; bg.BackgroundColor3=on and C.togOn or C.togOff; dot.Position=on and UDim2.new(1,-17,0.5,-7) or UDim2.new(0,3,0.5,-7) end
+    ref(); bg.MouseButton1Click:Connect(function() abState[shopKey].buyAll=not abState[shopKey].buyAll; ref() end)
+end
+
+local function buildSection(shopKey, items, hdrColor, icon, title, lo)
+    local COUNT=#items; local LIST_H=COUNT*(ITEM_H+ITEM_G)+6; local COLL_H=HDR_H+CTRL_H+4; local EXP_H=COLL_H+LIST_H
+    local outer=mkFrame(secScroll,nil,nil,C.card); outer.LayoutOrder=lo; outer.Size=UDim2.new(1,0,0,COLL_H); outer.ClipsDescendants=true; corner(outer,10)
+
+    local hdr=mkFrame(outer,UDim2.new(0,0,0,0),UDim2.new(1,0,0,HDR_H),hdrColor); corner(hdr,10)
+    mkFrame(hdr,UDim2.new(0,0,1,-10),UDim2.new(1,0,0,10),hdrColor)
+    mkLabel(hdr,UDim2.new(0,12,0,0),UDim2.new(0,160,1,0),icon.."  "..title,13,Enum.Font.GothamBold,Color3.fromRGB(7,16,11))
+    local badge=mkFrame(hdr,UDim2.new(0,178,0.5,-9),UDim2.new(0,60,0,18),Color3.fromRGB(7,16,11)); badge.BackgroundTransparency=0.45; corner(badge,9)
+    local badgeLbl=mkLabel(badge,UDim2.new(0,0,0,0),UDim2.new(1,0,1,0),"0/"..COUNT,10,Enum.Font.Gotham,C.white,Enum.TextXAlignment.Center)
+    local expBtn=mkBtn(hdr,UDim2.new(1,-88,0.5,-11),UDim2.new(0,80,0,22),"Select ▼",11,Color3.fromRGB(7,16,11),Color3.fromRGB(7,16,11)); expBtn.BackgroundTransparency=0.45; corner(expBtn,7)
+
+    local listFrame=mkFrame(outer,UDim2.new(0,0,0,HDR_H),UDim2.new(1,0,0,LIST_H),Color3.fromRGB(0,0,0)); listFrame.BackgroundTransparency=1; listFrame.Visible=false
+
+    for idx, name in pairs(items) do
+        local ry=(idx-1)*(ITEM_H+ITEM_G)+3
+        local irow=mkFrame(listFrame,UDim2.new(0,6,0,ry),UDim2.new(1,-12,0,ITEM_H),C.row); corner(irow,6)
+        local chk=mkBtn(irow,UDim2.new(0,7,0.5,-8),UDim2.new(0,16,0,16),abState[shopKey].selected[name] and "✓" or "",10,Color3.fromRGB(7,16,11),abState[shopKey].selected[name] and C.chkOn or C.chkOff); corner(chk,4)
+        mkLabel(irow,UDim2.new(0,29,0,0),UDim2.new(1,-32,1,0),name,12,Enum.Font.Gotham,C.text)
+        chkRefs[shopKey][name]=chk
+        local cn,ck=name,shopKey
+        chk.MouseButton1Click:Connect(function()
+            local val=not abState[ck].selected[cn]; abState[ck].selected[cn]=val
+            chk.BackgroundColor3=val and C.chkOn or C.chkOff; chk.Text=val and "✓" or ""
+            local cnt=0; for _,it in pairs(items) do if abState[ck].selected[it] then cnt=cnt+1 end end
+            badgeLbl.Text=cnt.."/"..COUNT
+        end)
+    end
+
+    local ctrl=mkFrame(outer,UDim2.new(0,0,0,HDR_H+2),UDim2.new(1,0,0,CTRL_H),Color3.fromRGB(0,0,0)); ctrl.BackgroundTransparency=1
+    local togRow=mkFrame(ctrl,UDim2.new(0,6,0,4),UDim2.new(1,-12,0,26),C.row); corner(togRow,7)
+    mkLabel(togRow,UDim2.new(0,10,0,0),UDim2.new(1,-50,1,0),"Buy Full Stock Each Restock",12,Enum.Font.Gotham,C.text)
+    makeTogSwitch(togRow,shopKey)
+
+    local hw=(PW-28)/2-3
+    local selBtn=mkBtn(ctrl,UDim2.new(0,6,0,34),UDim2.new(0,hw,0,24),"✓ Select All",11,C.dim,C.row); corner(selBtn,7)
+    local dslBtn=mkBtn(ctrl,UDim2.new(0,hw+10,0,34),UDim2.new(0,hw,0,24),"✕ Deselect All",11,C.dim,C.row); corner(dslBtn,7)
+
+    selBtn.MouseButton1Click:Connect(function()
+        for _,it in pairs(items) do abState[shopKey].selected[it]=true; if chkRefs[shopKey][it] then chkRefs[shopKey][it].BackgroundColor3=C.chkOn; chkRefs[shopKey][it].Text="✓" end end
+        badgeLbl.Text=COUNT.."/"..COUNT
+    end)
+    dslBtn.MouseButton1Click:Connect(function()
+        for _,it in pairs(items) do abState[shopKey].selected[it]=false; if chkRefs[shopKey][it] then chkRefs[shopKey][it].BackgroundColor3=C.chkOff; chkRefs[shopKey][it].Text="" end end
+        badgeLbl.Text="0/"..COUNT
+    end)
+
+    local enBtn=mkBtn(ctrl,UDim2.new(0,6,0,62),UDim2.new(1,-12,0,28),"▶  START AutoBuy",13,C.white,C.startG); corner(enBtn,8)
+    local function refEn() local on=abState[shopKey].enabled; enBtn.BackgroundColor3=on and C.stopR or C.startG; enBtn.Text=on and "⏹  STOP AutoBuy" or "▶  START AutoBuy" end
+    refEn()
+    enBtn.MouseButton1Click:Connect(function()
+        abState[shopKey].enabled=not abState[shopKey].enabled; refEn()
+        if abState[shopKey].enabled then setStatus("AutoBuy ON — "..title, C.green); startLoop()
+        else setStatus("Stopping...", C.orange) end
+    end)
+
+    local expanded=false
+    local function setExp(val)
+        expanded=val
+        if val then expBtn.Text="Select ▲"; listFrame.Visible=true; outer.Size=UDim2.new(1,0,0,EXP_H); ctrl.Position=UDim2.new(0,0,0,HDR_H+LIST_H+2)
+        else expBtn.Text="Select ▼"; listFrame.Visible=false; outer.Size=UDim2.new(1,0,0,COLL_H); ctrl.Position=UDim2.new(0,0,0,HDR_H+2) end
+    end
+    setExp(false)
+    expBtn.MouseButton1Click:Connect(function() setExp(not expanded) end)
+end
+
+buildSection("seed",SEED_ITEMS,C.seedHdr,"🌱","Seed Shop",1)
+buildSection("gear",GEAR_ITEMS,C.gearHdr,"⚙️","Gear Shop",2)
+
+-- Page 2 — Fruit Values
+local page2=mkFrame(panel,UDim2.new(0,0,0,CY),UDim2.new(0,PW,0,CH),Color3.fromRGB(0,0,0)); page2.BackgroundTransparency=1; page2.Visible=false
+local stBar=mkFrame(page2,UDim2.new(0,8,0,6),UDim2.new(1,-16,0,28),C.row); corner(stBar,7)
+local stLbl=mkLabel(stBar,UDim2.new(0,10,0,0),UDim2.new(1,-80,1,0),"Click Refresh to scan garden",11,Enum.Font.Gotham,C.dim)
+local refBtn=mkBtn(stBar,UDim2.new(1,-72,0.5,-10),UDim2.new(0,64,0,20),"↺ Refresh",11,Color3.fromRGB(7,16,11),C.accent); corner(refBtn,6)
+
+local fScroll=Instance.new("ScrollingFrame",page2); fScroll.Size=UDim2.new(1,-8,1,-44); fScroll.Position=UDim2.new(0,4,0,40); fScroll.BackgroundTransparency=1; fScroll.BorderSizePixel=0; fScroll.ScrollBarThickness=4; fScroll.ScrollBarImageColor3=C.accent; fScroll.CanvasSize=UDim2.new(0,0,0,0); fScroll.AutomaticCanvasSize=Enum.AutomaticSize.Y; fScroll.ClipsDescendants=true
+local fLayout=Instance.new("UIListLayout",fScroll); fLayout.Padding=UDim.new(0,4); fLayout.SortOrder=Enum.SortOrder.LayoutOrder
+local fPad=Instance.new("UIPadding",fScroll); fPad.PaddingLeft=UDim.new(0,4); fPad.PaddingRight=UDim.new(0,4); fPad.PaddingTop=UDim.new(0,4); fPad.PaddingBottom=UDim.new(0,4)
+
+local function buildFruitList(items)
+    for _, c in ipairs(fScroll:GetChildren()) do if not c:IsA("UIListLayout") and not c:IsA("UIPadding") then c:Destroy() end end
+    local tv,rc=0,0; for _,it in ipairs(items) do tv=tv+it.value; if it.value>0 then rc=rc+1 end end
+    stLbl.Text=string.format("📦 %d  ✅ %d  💰 %s",#items,rc,fmt(tv))
+    for i, item in ipairs(items) do
+        local pdata=PLANT_DATA[item.plantType]; local rarity=pdata and pdata.Rarity or "Common"
+        local rarCol=RARITY_COLORS[rarity] or Color3.fromRGB(160,160,160); local stgCol=STAGE_COLORS[item.stage] or Color3.fromRGB(160,160,160)
+        local hasMut=item.mutation~=""; local hasVar=item.variant~=""; local rowH=hasMut and 76 or 58
+        local row=mkBtn(fScroll,nil,nil,"",12,C.white,i%2==0 and Color3.fromRGB(20,26,38) or Color3.fromRGB(15,19,30))
+        row.Name="Row_"..i; row.Size=UDim2.new(1,0,0,rowH); row.LayoutOrder=i
+        corner(row,7); local rs=Instance.new("UIStroke",row); rs.Color=Color3.fromRGB(26,34,50); rs.Thickness=1
+        local acc=mkFrame(row,UDim2.new(0,4,0,5),UDim2.new(0,3,1,-10),rarCol); corner(acc,2)
+        mkLabel(row,UDim2.new(0,10,0,5),UDim2.new(0,24,0,14),"#"..i,10,Enum.Font.GothamBold,Color3.fromRGB(65,96,65))
+        local prefix=(item.isGiant and "⚡" or "")..(item.isPlant and "🌿 " or "🍎 ")
+        mkLabel(row,UDim2.new(0,36,0,4),UDim2.new(0,160,0,18),prefix..item.plantType,13,Enum.Font.GothamBold,Color3.fromRGB(195,255,195))
+        local vLbl=mkLabel(row,UDim2.new(1,-152,0,4),UDim2.new(0,148,0,18),item.value>0 and fmt(item.value) or "⏳ Growing",13,Enum.Font.GothamBold,item.value>0 and Color3.fromRGB(0,255,110) or Color3.fromRGB(110,110,110),Enum.TextXAlignment.Right)
+        mkLabel(row,UDim2.new(0,36,0,23),UDim2.new(0,78,0,12),rarity,9,Enum.Font.GothamBold,rarCol)
+        mkLabel(row,UDim2.new(1,-152,0,23),UDim2.new(0,108,0,12),string.format("⚖ %.4f kg",item.weight),9,Enum.Font.Gotham,Color3.fromRGB(0,185,230),Enum.TextXAlignment.Right)
+        mkLabel(row,UDim2.new(0,36,0,37),UDim2.new(0,138,0,12),string.format("🌱 %s ×%.2f",item.stage,item.ripe),9,Enum.Font.GothamBold,stgCol)
+        local bW=item.isPlant and (pdata and pdata.PlantBaseWeight or 1) or (pdata and pdata.FruitBaseWeight or 1)
+        local mStr=string.format("×%.2f scale",bW>0 and item.weight/bW or 0)..(hasVar and string.format(" ×%.1f var",item.varMult) or "")..(hasMut and string.format(" ×%.2f mut",item.mutMult) or "")
+        local multL=mkLabel(row,UDim2.new(1,-152,0,37),UDim2.new(0,148,0,12),mStr,8,Enum.Font.Gotham,Color3.fromRGB(96,175,96),Enum.TextXAlignment.Right); multL.TextTruncate=Enum.TextTruncate.AtEnd
+        if hasVar then
+            local vc=VARIANT_COLORS[item.variant] or Color3.fromRGB(200,200,200)
+            local vb=mkFrame(row,UDim2.new(0,118,0,38),UDim2.new(0,50,0,13),vc); vb.BackgroundTransparency=0.70; corner(vb,4)
+            mkLabel(vb,UDim2.new(0,0,0,0),UDim2.new(1,0,1,0),"✨ "..item.variant,8,Enum.Font.GothamBold,vc,Enum.TextXAlignment.Center)
+        end
+        if hasMut then
+            local xo,yp=36,rowH-19
+            for _, mName in ipairs(item.mutList) do
+                local md=MUTATION_DATA[mName]; local mult=md and md.priceMultiplier or 1
+                local mc=MUTATION_COLORS[mName] or Color3.fromRGB(255,80,80); local cw=math.max(46,#mName*6+18)
+                if xo+cw>PW-18 then break end
+                local chip=mkFrame(row,UDim2.new(0,xo,0,yp),UDim2.new(0,cw,0,14),mc); chip.BackgroundTransparency=0.72; corner(chip,4)
+                mkLabel(chip,UDim2.new(0,0,0,0),UDim2.new(1,0,1,0),mName.." ×"..tostring(mult),8,Enum.Font.GothamBold,mc,Enum.TextXAlignment.Center)
+                xo=xo+cw+3
+            end
+        end
+        local cm,cr,ci=item.model,row,i
+        row.MouseButton1Click:Connect(function()
+            for _, r in ipairs(fScroll:GetChildren()) do if r:IsA("TextButton") then local idx=tonumber(r.Name:match("Row_(%d+)")); if idx then r.BackgroundColor3=idx%2==0 and Color3.fromRGB(20,26,38) or Color3.fromRGB(15,19,30); local st=r:FindFirstChildWhichIsA("UIStroke"); if st then st.Color=Color3.fromRGB(26,34,50); st.Thickness=1 end end end end
+            cr.BackgroundColor3=Color3.fromRGB(0,40,22); local sel=cr:FindFirstChildWhichIsA("UIStroke"); if sel then sel.Color=Color3.fromRGB(0,205,90); sel.Thickness=2 end
+            if cm and cm.Parent then highlightModel(cm) end
+            pcall(function() local cf; if cm:IsA("Model") then local ok2,mc2=pcall(function() return cm:GetModelCFrame() end); if ok2 then cf=mc2 end elseif cm:IsA("BasePart") then cf=cm.CFrame end; if cf then workspace.CurrentCamera.CFrame=CFrame.new(cf.Position+Vector3.new(0,5,10),cf.Position) end end)
+        end)
+    end
+end
+
+refBtn.MouseButton1Click:Connect(function() clearHL(); buildFruitList(collectData()) end)
+
+-- Tab switching
+local function switchTab(name)
+    if name=="autobuy" then
+        page1.Visible=true; page2.Visible=false
+        tab1.BackgroundColor3=C.tabOn; tab1.TextColor3=Color3.fromRGB(7,16,11)
+        tab2.BackgroundColor3=C.tabOff; tab2.TextColor3=C.dim; clearHL()
+    else
+        page1.Visible=false; page2.Visible=true
+        tab2.BackgroundColor3=C.tabOn; tab2.TextColor3=Color3.fromRGB(7,16,11)
+        tab1.BackgroundColor3=C.tabOff; tab1.TextColor3=C.dim
+        buildFruitList(collectData())
+    end
+end
+tab1.MouseButton1Click:Connect(function() switchTab("autobuy") end)
+tab2.MouseButton1Click:Connect(function() switchTab("fruitval") end)
+
+local panelOpen=false
+toggleBtn.MouseButton1Click:Connect(function() panelOpen=not panelOpen; panel.Visible=panelOpen end)
+closeBtn.MouseButton1Click:Connect(function() panelOpen=false; panel.Visible=false; clearHL() end)
+
+local dragging,dragStart,dragBase
+panel.InputBegan:Connect(function(inp) if inp.UserInputType==Enum.UserInputType.MouseButton1 then dragging=true; dragStart=inp.Position; dragBase=panel.Position end end)
+panel.InputChanged:Connect(function(inp) if dragging and inp.UserInputType==Enum.UserInputType.MouseMovement then local d=inp.Position-dragStart; panel.Position=UDim2.new(dragBase.X.Scale,dragBase.X.Offset+d.X,dragBase.Y.Scale,dragBase.Y.Offset+d.Y) end end)
+panel.InputEnded:Connect(function(inp) if inp.UserInputType==Enum.UserInputType.MouseButton1 then dragging=false end end)
+
+print("[GH Tools] Loaded!")
+pcall(function() setclipboard("[GH Tools] Loaded!") end)
