@@ -31,8 +31,8 @@ local SEED_ITEMS = {"Carrot Seed","Corn Seed","Onion Seed","Strawberry Seed","Mu
 local GEAR_ITEMS = {"Watering Can","Basic Sprinkler","Harvest Bell","Turbo Sprinkler","Favorite Tool","Super Sprinkler","Trowel"}
 
 local abState = {
-    seed = {enabled=false, selected={}, buyAll=false},
-    gear = {enabled=false, selected={}, buyAll=false},
+    seed = {enabled=false, selected={}},
+    gear = {enabled=false, selected={}},
 }
 for _, v in pairs(SEED_ITEMS) do abState.seed.selected[v] = false end
 for _, v in pairs(GEAR_ITEMS) do abState.gear.selected[v] = false end
@@ -81,9 +81,9 @@ local function setStatus(txt, col)
     if statusLbl then statusLbl.Text="● "..txt; statusLbl.TextColor3=col or C.dim end
 end
 local function corner(p, r) local c=Instance.new("UICorner",p); c.CornerRadius=UDim.new(0,r or 8) end
-local function mkFrame(par,pos,sz,bg) local f=Instance.new("Frame",par); f.Position=pos; f.Size=sz; f.BackgroundColor3=bg or C.card; f.BorderSizePixel=0; return f end
-local function mkLabel(par,pos,sz,txt,tsz,fnt,col,xa) local l=Instance.new("TextLabel",par); l.Position=pos; l.Size=sz; l.BackgroundTransparency=1; l.Text=txt; l.TextSize=tsz or 12; l.Font=fnt or Enum.Font.Gotham; l.TextColor3=col or C.text; l.TextXAlignment=xa or Enum.TextXAlignment.Left; return l end
-local function mkBtn(par,pos,sz,txt,tsz,col,bg) local b=Instance.new("TextButton",par); b.Position=pos; b.Size=sz; b.BackgroundColor3=bg or C.card; b.Text=txt; b.TextSize=tsz or 12; b.Font=Enum.Font.GothamBold; b.TextColor3=col or C.text; b.BorderSizePixel=0; b.AutoButtonColor=false; return b end
+local function mkFrame(par,pos,sz,bg) local f=Instance.new("Frame",par); if pos then f.Position=pos end; if sz then f.Size=sz end; f.BackgroundColor3=bg or C.card; f.BorderSizePixel=0; return f end
+local function mkLabel(par,pos,sz,txt,tsz,fnt,col,xa) local l=Instance.new("TextLabel",par); if pos then l.Position=pos end; if sz then l.Size=sz end; l.BackgroundTransparency=1; l.Text=txt; l.TextSize=tsz or 12; l.Font=fnt or Enum.Font.Gotham; l.TextColor3=col or C.text; l.TextXAlignment=xa or Enum.TextXAlignment.Left; return l end
+local function mkBtn(par,pos,sz,txt,tsz,col,bg) local b=Instance.new("TextButton",par); if pos then b.Position=pos end; if sz then b.Size=sz end; b.BackgroundColor3=bg or C.card; b.Text=txt; b.TextSize=tsz or 12; b.Font=Enum.Font.GothamBold; b.TextColor3=col or C.text; b.BorderSizePixel=0; b.AutoButtonColor=false; return b end
 
 local function calcValue(plantType, weight, mutStr, varStr, ripe, isPlant)
     local pdata = PLANT_DATA[plantType]
@@ -158,103 +158,174 @@ local function collectData()
 end
 
 -- ════════════════════════════════════════
--- AUTOBUY LOGIC — single trip for both shops
+-- AUTOBUY LOGIC
+-- Flow: save pos → TP seed shop → buy ALL selected → TP gear shop → buy ALL selected → TP back
+-- Only ONE teleport back at the very end. Never TPs mid-buying.
 -- ════════════════════════════════════════
 local function tpTo(pos) local hrp=getHRP(); if hrp then hrp.CFrame=CFrame.new(pos) end end
 
-local function buyShop(shopId, shopKey, shopPos)
-    local ok, data = pcall(function() return GetShopData:InvokeServer(shopId) end)
-    if not ok or not data or not data.Items then return 0 end
+-- Fetch stock data for a shop, returns data or nil
+local function fetchStock(shopId)
+    local ok, d = pcall(function() return GetShopData:InvokeServer(shopId) end)
+    if ok and d and d.Items then return d end
+    return nil
+end
+
+-- Given already-fetched data, buy ALL stock of ALL selected items. Must already be TP'd there.
+-- No extra TPs happen inside here at all.
+local function buyAllAtShop(shopId, shopKey, data)
+    if not data then return 0 end
     local items = shopKey=="seed" and SEED_ITEMS or GEAR_ITEMS
-    local toBuy = {}
+    local bought = 0
     for _, name in pairs(items) do
         if abState[shopKey].selected[name] then
-            local e = data.Items[name]; if e and e.Amount and e.Amount>0 then table.insert(toBuy, name) end
-        end
-    end
-    if #toBuy == 0 then return 0 end
-
-    tpTo(shopPos); wait(0.3)
-    local bought = 0
-    for _, name in pairs(toBuy) do
-        if not abState[shopKey].enabled then break end
-        local available = (data.Items[name] and data.Items[name].Amount) or 0
-        local maxBuys = abState[shopKey].buyAll and available or 1
-        for i = 1, maxBuys do
-            if not abState[shopKey].enabled then break end
-            setStatus("Buying "..name.." "..i.."/"..maxBuys, C.orange)
-            local pok, result = pcall(function() return PurchaseShopItem:InvokeServer(shopId, name) end)
-            if pok and result then
-                bought = bought + 1
-                if type(result)=="table" and result.Items then
-                    data = result
-                    local rem = data.Items[name] and data.Items[name].Amount or 0
-                    if rem <= 0 then break end
+            local available = (data.Items[name] and data.Items[name].Amount) or 0
+            local i = 0
+            while i < available do
+                setStatus(shopKey=="seed" and "Seed: " or "Gear: "..name.." "..(i+1).."/"..available, C.orange)
+                local pok, result = pcall(function() return PurchaseShopItem:InvokeServer(shopId, name) end)
+                if pok and result then
+                    bought = bought + 1
+                    i = i + 1
+                    if type(result)=="table" and result.Items then
+                        data = result
+                        available = (data.Items[name] and data.Items[name].Amount) or 0
+                        if available <= 0 then break end
+                    end
+                else
+                    break
                 end
-            else break end
-            wait(0.07)
+                wait(0.07)
+            end
         end
     end
     return bought
 end
 
--- ONE shared loop — saves pos once, visits enabled shops, TPs back once
 local loopRunning = false
 local function startLoop()
     if loopRunning then return end
     loopRunning = true
     spawn(function()
+        local savedPos   = getHRP().CFrame.Position  -- saved ONCE, never overwritten
+        local currentShop = nil  -- nil = home, "seed" = at seed shop, "gear" = at gear shop
+
+        local function selectedHasStock(shopKey, data)
+            if not data or not data.Items then return false end
+            local items = shopKey=="seed" and SEED_ITEMS or GEAR_ITEMS
+            for _, name in pairs(items) do
+                if abState[shopKey].selected[name] then
+                    local e = data.Items[name]
+                    if e and e.Amount and e.Amount > 0 then return true end
+                end
+            end
+            return false
+        end
+
         while abState.seed.enabled or abState.gear.enabled do
             if not isBuying then
-                -- check if anything to buy before TP
-                local seedHasStock, gearHasStock = false, false
-                if abState.seed.enabled then
-                    local ok, d = pcall(function() return GetShopData:InvokeServer("SeedShop") end)
-                    if ok and d and d.Items then
-                        for _, name in pairs(SEED_ITEMS) do
-                            if abState.seed.selected[name] then
-                                local e = d.Items[name]; if e and e.Amount and e.Amount>0 then seedHasStock=true; break end
+                isBuying = true
+
+                if currentShop == nil then
+                    -- At home — check which shop to go to first
+                    local seedData = abState.seed.enabled and fetchStock("SeedShop") or nil
+                    local gearData = abState.gear.enabled and fetchStock("GearShop") or nil
+
+                    if abState.seed.enabled and selectedHasStock("seed", seedData) then
+                        setStatus("TP → Seed Shop...", C.orange)
+                        tpTo(SEED_POS); wait(0.45)
+                        currentShop = "seed"
+                        buyAllAtShop("SeedShop", "seed", seedData)
+                    elseif abState.gear.enabled and selectedHasStock("gear", gearData) then
+                        setStatus("TP → Gear Shop...", C.orange)
+                        tpTo(GEAR_POS); wait(0.45)
+                        currentShop = "gear"
+                        buyAllAtShop("GearShop", "gear", gearData)
+                    else
+                        setStatus("Watching for stock...", C.dim)
+                    end
+
+                elseif currentShop == "seed" then
+                    -- Already at seed shop — buy whatever is available
+                    local seedData = fetchStock("SeedShop")
+                    if selectedHasStock("seed", seedData) then
+                        setStatus("Seed Shop: buying...", C.orange)
+                        buyAllAtShop("SeedShop", "seed", seedData)
+                        -- Re-check after buying
+                        local fresh = fetchStock("SeedShop")
+                        if not selectedHasStock("seed", fresh) then
+                            -- Seed done — move to gear if needed
+                            local gearData = abState.gear.enabled and fetchStock("GearShop") or nil
+                            if abState.gear.enabled and selectedHasStock("gear", gearData) then
+                                setStatus("TP → Gear Shop...", C.orange)
+                                tpTo(GEAR_POS); wait(0.45)
+                                currentShop = "gear"
+                                buyAllAtShop("GearShop", "gear", gearData)
+                                -- Check if gear is also done
+                                local freshGear = fetchStock("GearShop")
+                                if not selectedHasStock("gear", freshGear) then
+                                    tpTo(savedPos); currentShop = nil
+                                    setStatus("All done — back home!", C.green)
+                                else
+                                    setStatus("Gear: waiting for restock...", C.orange)
+                                end
+                            else
+                                -- No gear needed — go home
+                                tpTo(savedPos); currentShop = nil
+                                setStatus("Seed done — back home!", C.green)
                             end
+                        else
+                            setStatus("Seed: waiting for restock...", C.orange)
+                        end
+                    else
+                        -- Seed out of stock — move to gear if needed
+                        local gearData = abState.gear.enabled and fetchStock("GearShop") or nil
+                        if abState.gear.enabled and selectedHasStock("gear", gearData) then
+                            setStatus("TP → Gear Shop...", C.orange)
+                            tpTo(GEAR_POS); wait(0.45)
+                            currentShop = "gear"
+                            buyAllAtShop("GearShop", "gear", gearData)
+                        else
+                            tpTo(savedPos); currentShop = nil
+                            setStatus("All done — back home!", C.green)
                         end
                     end
-                end
-                if abState.gear.enabled then
-                    local ok, d = pcall(function() return GetShopData:InvokeServer("GearShop") end)
-                    if ok and d and d.Items then
-                        for _, name in pairs(GEAR_ITEMS) do
-                            if abState.gear.selected[name] then
-                                local e = d.Items[name]; if e and e.Amount and e.Amount>0 then gearHasStock=true; break end
-                            end
+
+                elseif currentShop == "gear" then
+                    -- Already at gear shop — buy whatever is available
+                    local gearData = fetchStock("GearShop")
+                    if selectedHasStock("gear", gearData) then
+                        setStatus("Gear Shop: buying...", C.orange)
+                        buyAllAtShop("GearShop", "gear", gearData)
+                        local fresh = fetchStock("GearShop")
+                        if not selectedHasStock("gear", fresh) then
+                            tpTo(savedPos); currentShop = nil
+                            setStatus("All done — back home!", C.green)
+                        else
+                            setStatus("Gear: waiting for restock...", C.orange)
                         end
+                    else
+                        tpTo(savedPos); currentShop = nil
+                        setStatus("All done — back home!", C.green)
                     end
                 end
 
-                if seedHasStock or gearHasStock then
-                    isBuying = true
-                    local savedPos = getHRP().CFrame.Position
-                    local total = 0
-                    if seedHasStock then total = total + buyShop("SeedShop","seed",SEED_POS) end
-                    if gearHasStock then total = total + buyShop("GearShop","gear",GEAR_POS) end
-                    tpTo(savedPos)
-                    if total > 0 then setStatus("Bought x"..total.." — back!", C.green)
-                    else setStatus("Nothing bought — back", C.dim) end
-                    isBuying = false
-                else
-                    setStatus("Watching stock...", C.dim)
-                end
+                isBuying = false
             end
             wait(1)
         end
+
+        -- STOP pressed — tp home if still at a shop
+        if currentShop ~= nil then tpTo(savedPos) end
         loopRunning = false
-        if not abState.seed.enabled and not abState.gear.enabled then setStatus("Stopped", C.dim) end
+        setStatus("Stopped", C.dim)
     end)
 end
 
 ShopRestocked.OnClientEvent:Connect(function(shopId)
     local shopKey = (shopId=="SeedShop") and "seed" or "gear"
-    if abState[shopKey].enabled and not isBuying then
-        setStatus("Restock detected!", C.orange)
-        -- loop will pick it up on next 1s tick automatically
+    if abState[shopKey].enabled then
+        setStatus("Restock! Checking stock...", C.orange)
     end
 end)
 
@@ -307,14 +378,9 @@ local secScroll=Instance.new("ScrollingFrame",page1); secScroll.Size=UDim2.new(1
 local secLayout=Instance.new("UIListLayout",secScroll); secLayout.Padding=UDim.new(0,8); secLayout.SortOrder=Enum.SortOrder.LayoutOrder
 local secPad=Instance.new("UIPadding",secScroll); secPad.PaddingTop=UDim.new(0,6); secPad.PaddingBottom=UDim.new(0,10); secPad.PaddingLeft=UDim.new(0,8); secPad.PaddingRight=UDim.new(0,8)
 
-local HDR_H,ITEM_H,ITEM_G,CTRL_H = 36,26,2,94
+local HDR_H,ITEM_H,ITEM_G,CTRL_H = 36,26,2,66
 
-local function makeTogSwitch(parent, shopKey)
-    local bg=mkBtn(parent,UDim2.new(1,-44,0.5,-10),UDim2.new(0,36,0,20),"",0,nil,C.togOff); corner(bg,11)
-    local dot=mkFrame(bg,UDim2.new(0,3,0.5,-7),UDim2.new(0,14,0,14),C.white); corner(dot,7)
-    local function ref() local on=abState[shopKey].buyAll; bg.BackgroundColor3=on and C.togOn or C.togOff; dot.Position=on and UDim2.new(1,-17,0.5,-7) or UDim2.new(0,3,0.5,-7) end
-    ref(); bg.MouseButton1Click:Connect(function() abState[shopKey].buyAll=not abState[shopKey].buyAll; ref() end)
-end
+
 
 local function buildSection(shopKey, items, hdrColor, icon, title, lo)
     local COUNT=#items; local LIST_H=COUNT*(ITEM_H+ITEM_G)+6; local COLL_H=HDR_H+CTRL_H+4; local EXP_H=COLL_H+LIST_H
@@ -345,13 +411,10 @@ local function buildSection(shopKey, items, hdrColor, icon, title, lo)
     end
 
     local ctrl=mkFrame(outer,UDim2.new(0,0,0,HDR_H+2),UDim2.new(1,0,0,CTRL_H),Color3.fromRGB(0,0,0)); ctrl.BackgroundTransparency=1
-    local togRow=mkFrame(ctrl,UDim2.new(0,6,0,4),UDim2.new(1,-12,0,26),C.row); corner(togRow,7)
-    mkLabel(togRow,UDim2.new(0,10,0,0),UDim2.new(1,-50,1,0),"Buy Full Stock Each Restock",12,Enum.Font.Gotham,C.text)
-    makeTogSwitch(togRow,shopKey)
 
     local hw=(PW-28)/2-3
-    local selBtn=mkBtn(ctrl,UDim2.new(0,6,0,34),UDim2.new(0,hw,0,24),"✓ Select All",11,C.dim,C.row); corner(selBtn,7)
-    local dslBtn=mkBtn(ctrl,UDim2.new(0,hw+10,0,34),UDim2.new(0,hw,0,24),"✕ Deselect All",11,C.dim,C.row); corner(dslBtn,7)
+    local selBtn=mkBtn(ctrl,UDim2.new(0,6,0,4),UDim2.new(0,hw,0,24),"✓ Select All",11,C.dim,C.row); corner(selBtn,7)
+    local dslBtn=mkBtn(ctrl,UDim2.new(0,hw+10,0,4),UDim2.new(0,hw,0,24),"✕ Deselect All",11,C.dim,C.row); corner(dslBtn,7)
 
     selBtn.MouseButton1Click:Connect(function()
         for _,it in pairs(items) do abState[shopKey].selected[it]=true; if chkRefs[shopKey][it] then chkRefs[shopKey][it].BackgroundColor3=C.chkOn; chkRefs[shopKey][it].Text="✓" end end
@@ -362,7 +425,7 @@ local function buildSection(shopKey, items, hdrColor, icon, title, lo)
         badgeLbl.Text="0/"..COUNT
     end)
 
-    local enBtn=mkBtn(ctrl,UDim2.new(0,6,0,62),UDim2.new(1,-12,0,28),"▶  START AutoBuy",13,C.white,C.startG); corner(enBtn,8)
+    local enBtn=mkBtn(ctrl,UDim2.new(0,6,0,32),UDim2.new(1,-12,0,28),"▶  START AutoBuy",13,C.white,C.startG); corner(enBtn,8)
     local function refEn() local on=abState[shopKey].enabled; enBtn.BackgroundColor3=on and C.stopR or C.startG; enBtn.Text=on and "⏹  STOP AutoBuy" or "▶  START AutoBuy" end
     refEn()
     enBtn.MouseButton1Click:Connect(function()
